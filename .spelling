@@ -126,9 +126,9 @@ Snyk
 Sumit
 Tekton
 Traefik
-Triaging
 TripAdvisor
 UI
+UTF-8
 VSCode
 Valasek
 Webhooks
@@ -236,6 +236,7 @@ symlinks
 temporality
 tolerations
 triaged
+triaging
 un-reconciled
 v1
 v1.0

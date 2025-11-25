@@ -113,7 +113,7 @@ func SubstituteResourceManifestExpressions(manifest string) string {
 	var substitutions = make(map[string]string)
 	pattern, _ := regexp.Compile(`{{\s*=\s*(.+?)\s*}}`)
 	for _, match := range pattern.FindAllStringSubmatch(manifest, -1) {
-		substitutions[string(match[1])] = placeholderGenerator.NextPlaceholder()
+		substitutions[match[1]] = placeholderGenerator.NextPlaceholder()
 	}
 
 	// since we don't need to resolve/evaluate here we can do just a simple replacement
@@ -279,6 +279,38 @@ func ValidateWorkflow(ctx context.Context, wftmplGetter templateresolution.Workf
 	}
 	if tmplHolder != nil {
 		tctx.globalParams[common.GlobalVarWorkflowFailures] = placeholderGenerator.NextPlaceholder()
+
+		// Check if any template has parametrized global artifacts, if so enable global artifact resolution for exit handlers
+		hasParametrizedGlobalArtifacts := false
+		for _, tmpl := range wf.Spec.Templates {
+			for _, art := range tmpl.Outputs.Artifacts {
+				if art.GlobalName != "" && isParameter(art.GlobalName) {
+					hasParametrizedGlobalArtifacts = true
+					break
+				}
+			}
+			if hasParametrizedGlobalArtifacts {
+				break
+			}
+		}
+		if hasWorkflowTemplateRef && !hasParametrizedGlobalArtifacts {
+			// Also check the referenced workflow template
+			for _, tmpl := range wfSpecHolder.GetWorkflowSpec().Templates {
+				for _, art := range tmpl.Outputs.Artifacts {
+					if art.GlobalName != "" && isParameter(art.GlobalName) {
+						hasParametrizedGlobalArtifacts = true
+						break
+					}
+				}
+				if hasParametrizedGlobalArtifacts {
+					break
+				}
+			}
+		}
+		if hasParametrizedGlobalArtifacts {
+			tctx.globalParams[anyWorkflowOutputArtifactMagicValue] = "true"
+		}
+
 		_, err = tctx.validateTemplateHolder(ctx, tmplHolder, tmplCtx, &wf.Spec.Arguments, opts.WorkflowTemplateValidation)
 		if err != nil {
 			return err
@@ -373,9 +405,6 @@ func ValidateClusterWorkflowTemplate(ctx context.Context, wftmplGetter templater
 
 // ValidateCronWorkflow validates a CronWorkflow
 func ValidateCronWorkflow(ctx context.Context, wftmplGetter templateresolution.WorkflowTemplateNamespacedGetter, cwftmplGetter templateresolution.ClusterWorkflowTemplateGetter, cronWf *wfv1.CronWorkflow, wfDefaults *wfv1.Workflow) error {
-	if len(cronWf.Spec.Schedules) > 0 && cronWf.Spec.Schedule != "" {
-		return fmt.Errorf("cron workflow cant be configured with both Spec.Schedule and Spec.Schedules")
-	}
 	// CronWorkflows have fewer max chars allowed in their name because when workflows are created from them, they
 	// are appended with the unix timestamp (`-1615836720`). This lower character allowance allows for that timestamp
 	// to still fit within the 63 character maximum.
@@ -383,7 +412,11 @@ func ValidateCronWorkflow(ctx context.Context, wftmplGetter templateresolution.W
 		return fmt.Errorf("cron workflow name %q must not be more than 52 characters long (currently %d)", cronWf.Name, len(cronWf.Name))
 	}
 
-	for _, schedule := range cronWf.Spec.GetSchedules(ctx) {
+	if len(cronWf.Spec.Schedules) == 0 {
+		return fmt.Errorf("cron workflow must have at least one schedule")
+	}
+
+	for _, schedule := range cronWf.Spec.GetSchedules() {
 		if _, err := cron.ParseStandard(schedule); err != nil {
 			return errors.Errorf(errors.CodeBadRequest, "cron schedule %s is malformed: %s", schedule, err)
 		}
@@ -1565,7 +1598,7 @@ func sortDAGTasks(ctx context.Context, tmpl *wfv1.Template, tctx *dagValidationC
 var (
 	// paramRegex matches a parameter. e.g. {{inputs.parameters.blah}}
 	paramRegex               = regexp.MustCompile(`{{[-a-zA-Z0-9]+(\.[-a-zA-Z0-9_]+)*}}`)
-	paramOrArtifactNameRegex = regexp.MustCompile(`^[-a-zA-Z0-9_]+[-a-zA-Z0-9_]*$`)
+	paramOrArtifactNameRegex = regexp.MustCompile(`^[-a-zA-Z0-9_]+$`)
 	workflowFieldNameRegex   = regexp.MustCompile("^" + workflowFieldNameFmt + "$")
 )
 
